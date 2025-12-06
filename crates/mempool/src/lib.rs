@@ -28,8 +28,8 @@ pub trait Mempool {
     fn len(&self) -> usize;
 }
 
-/// A naive in-memory mempool that preserves insertion order and tracks
-/// transactions per namespace for a priority-based, gas-aware implementation.
+/// A mempool that tracks transactions per namespace and supports
+/// gas-price-based prioritization when building batches.
 #[derive(Debug)]
 pub struct SimpleMempool {
     config: MempoolConfig,
@@ -77,10 +77,30 @@ impl Mempool for SimpleMempool {
     }
 
     fn get_batch(&self, max: usize) -> Vec<(TxId, Transaction)> {
-        self.queue
-            .iter()
+        if max == 0 || self.txs.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates: Vec<(TxId, &Transaction, usize)> = Vec::with_capacity(self.txs.len());
+
+        for (pos, id) in self.queue.iter().enumerate() {
+            if let Some(tx) = self.txs.get(id) {
+                candidates.push((*id, tx, pos));
+            }
+        }
+
+        candidates.sort_by(|a, b| {
+            let gas_ord = b.1.gas_price.cmp(&a.1.gas_price);
+            if gas_ord != std::cmp::Ordering::Equal {
+                return gas_ord;
+            }
+            a.2.cmp(&b.2)
+        });
+
+        candidates
+            .into_iter()
             .take(max)
-            .filter_map(|id| self.txs.get(id).cloned().map(|tx| (*id, tx)))
+            .map(|(id, tx, _)| (id, tx.clone()))
             .collect()
     }
 
@@ -150,5 +170,23 @@ mod tests {
         mp.insert(make_tx(1, 1)).unwrap();
         let res = mp.insert(make_tx(1, 2));
         assert!(matches!(res, Err(MempoolError::Full)));
+    }
+
+    #[test]
+    fn higher_gas_price_is_prioritized() {
+        let mut mp = SimpleMempool::default();
+
+        let mut tx_low = make_tx(1, 1);
+        tx_low.gas_price = 1;
+        let mut tx_high = make_tx(1, 2);
+        tx_high.gas_price = 10;
+
+        let id_low = mp.insert(tx_low).unwrap();
+        let id_high = mp.insert(tx_high).unwrap();
+
+        let batch = mp.get_batch(2);
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].0, id_high);
+        assert_eq!(batch[1].0, id_low);
     }
 }

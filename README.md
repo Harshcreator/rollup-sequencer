@@ -3,7 +3,7 @@
 
 A production-grade transaction ordering and finality engine for rollups, inspired by Espresso Systems.
 
-## Status: íº§ Under Development
+## Status: Under Development
 
 ## Quick Start
 ```bash

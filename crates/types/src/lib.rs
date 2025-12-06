@@ -1,23 +1,23 @@
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 
-/// Fixed-size hash used across the sequencer.
+/// Fixed-size hash used across the sequencer
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Hash(#[serde(with = "serde_bytes_array")] pub [u8; 32]);
 
-/// Transaction identifier (hash of canonical encoding).
+/// Transaction identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxId(pub Hash);
 
-/// Block identifier (hash of header encoding).
+/// Block identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlockId(pub Hash);
 
-/// Logical namespace / rollup identifier.
+/// Logical namespace / rollup identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NamespaceId(pub u64);
 
-/// Basic transaction status for RPC and storage.
+/// Basic transaction status for RPC and storage
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransactionStatus {
     Pending,
@@ -25,31 +25,25 @@ pub enum TransactionStatus {
     Rejected,
 }
 
-/// Core transaction type used by the sequencer.
+/// Core transaction type used by the sequencer
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transaction {
     pub namespace: NamespaceId,
-    /// Gas price in arbitrary units; higher is prioritized.
     pub gas_price: u64,
-    /// Monotonically increasing per-sender nonce (semantics defined by rollup).
     pub nonce: u64,
-    /// Opaque payload interpreted by the rollup.
     #[serde(with = "serde_bytes_vec")]
     pub payload: Vec<u8>,
-    /// Placeholder for future signature support.
     #[serde(with = "serde_bytes_vec")]
     pub signature: Vec<u8>,
 }
 
 impl Transaction {
-    /// Compute the canonical transaction identifier from its serialized form.
     pub fn id(&self) -> TxId {
         let encoded = bincode::serialize(self).expect("transaction should serialize");
         TxId(hash_bytes(&encoded))
     }
 }
 
-/// Block header capturing commitment and sequencing metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub height: u64,
@@ -68,7 +62,7 @@ impl BlockHeader {
     }
 }
 
-/// Block consisting of a header and ordered list of transaction IDs.
+/// Block consisting of a header and list of transaction IDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
@@ -78,14 +72,11 @@ pub struct Block {
 /// Merkle proof for a transaction's inclusion in a block.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleProof {
-    /// Zero-based index of the leaf.
     pub index: u32,
-    /// Sibling hashes along the path to the root.
     pub siblings: Vec<Hash>,
 }
 
 /// Compute a Merkle root from a list of transaction IDs.
-///
 /// Empty input yields a zero hash.
 pub fn merkle_root(txs: &[TxId]) -> Hash {
     if txs.is_empty() {
@@ -133,12 +124,10 @@ pub fn merkle_proof(txs: &[TxId], index: usize) -> Option<MerkleProof> {
         let sibling_hash = if sibling_idx < layer.len() {
             layer[sibling_idx]
         } else {
-            // Duplicate when odd number of leaves.
             layer[idx]
         };
         siblings.push(sibling_hash);
 
-        // Move up one level.
         idx /= 2;
 
         let mut next = Vec::with_capacity((layer.len() + 1) / 2);
@@ -186,7 +175,6 @@ pub fn verify_merkle_proof(root: Hash, leaf: TxId, proof: &MerkleProof) -> bool 
     hash == root
 }
 
-/// Hash arbitrary bytes into the canonical `Hash` type using BLAKE3.
 pub fn hash_bytes(data: &[u8]) -> Hash {
     let mut hasher = Hasher::new();
     hasher.update(data);

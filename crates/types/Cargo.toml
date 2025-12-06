@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 blake3 = "1"
+
+# Used for canonical binary serialization of types when computing IDs.
+bincode = "1"
+

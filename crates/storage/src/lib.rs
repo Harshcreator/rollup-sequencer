@@ -137,7 +137,7 @@ impl BlockStore for SledStorage {
             .insert(key_id, value)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
         self.blocks_by_height
-            .insert(key_height, id.0 .0)
+            .insert(key_height, &id.0 .0)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
         Ok(())
     }
@@ -195,18 +195,14 @@ impl StateStore for SledStorage {
     fn put_state_root(&mut self, height: u64, root: Hash) -> Result<(), StorageError> {
         let key_height = height.to_be_bytes();
         self.state_roots
-            .insert(key_height, root.0)
+            .insert(key_height, &root.0)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn latest_state_root(&self) -> Result<(u64, Hash), StorageError> {
         let mut latest: Option<(u64, Hash)> = None;
-        for res in self
-            .state_roots
-            .iter()
-            .map_err(|e| StorageError::Backend(e.to_string()))?
-        {
+        for res in self.state_roots.iter() {
             let (k, v) = res.map_err(|e| StorageError::Backend(e.to_string()))?;
             let mut height_bytes = [0u8; 8];
             height_bytes.copy_from_slice(&k);

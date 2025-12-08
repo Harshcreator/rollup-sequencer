@@ -8,3 +8,4 @@ types = { path = "../types" }
 thiserror = "1"
 sled = "0.34"
 tempfile = "3"
+bincode = "1"

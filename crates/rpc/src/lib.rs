@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{extract::State, response::IntoResponse, routing::get, routing::post, Json, Router};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, routing::post, Json, Router};
 use consensus::ConsensusEngine;
 use networking::NetworkHandle;
 use serde::{Deserialize, Serialize};
@@ -33,12 +33,18 @@ pub struct TxStatusResponse {
     pub found: bool,
 }
 
+#[derive(Serialize)]
+struct ErrorResponse {
+	error: String,
+}
+
 type AppState<E> = RpcState<E>;
 
+#[tracing::instrument(skip(state, req))]
 async fn submit_tx_handler<E: ConsensusEngine + Send + Sync + 'static>(
     State(state): State<AppState<E>>,
     Json(req): Json<SubmitTxRequest>,
-) -> Json<SubmitTxResponse> {
+) -> Result<Json<SubmitTxResponse>, (StatusCode, Json<ErrorResponse>)> {
     let tx = Transaction {
         namespace: NamespaceId(req.namespace),
         gas_price: req.gas_price,
@@ -51,7 +57,14 @@ async fn submit_tx_handler<E: ConsensusEngine + Send + Sync + 'static>(
     let mut engine = state.engine.lock().await;
     let tx_id = engine
         .submit_tx(tx)
-        .expect("submit_tx should not fail in RPC handler");
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                        error: format!("submit_tx failed: {e}"),
+                    }),
+            )
+        })?;
     drop(engine);
 
     if let Some(net) = &state.network {
@@ -59,15 +72,16 @@ async fn submit_tx_handler<E: ConsensusEngine + Send + Sync + 'static>(
         net.broadcast_tx(tx_clone).await;
     }
 
-    Json(SubmitTxResponse {
+    Ok(Json(SubmitTxResponse {
         tx_id: hex::encode(tx_id.0 .0),
-    })
+    }))
 }
 
 async fn health_handler() -> &'static str {
     "ok"
 }
 
+#[tracing::instrument(skip_all)]
 async fn metrics_handler() -> impl IntoResponse {
     let body = metrics::render_metrics();
     ([("Content-Type", "text/plain; version=0.0.4")], body)
@@ -85,6 +99,7 @@ where
 }
 
 /// Helper to spawn the Axum server on the given address.
+#[tracing::instrument(skip(state))]
 pub async fn run_rpc_server<E>(
     state: RpcState<E>,
     addr: std::net::SocketAddr,

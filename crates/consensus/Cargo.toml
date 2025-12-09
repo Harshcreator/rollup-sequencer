@@ -9,3 +9,4 @@ mempool = { path = "../mempool" }
 storage = { path = "../storage" }
 thiserror = "1"
 metrics = { path = "../metrics" }
+tracing = "0.1"

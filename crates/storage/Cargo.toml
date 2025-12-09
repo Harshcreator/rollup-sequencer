@@ -8,4 +8,10 @@ types = { path = "../types" }
 thiserror = "1"
 sled = "0.34"
 tempfile = "3"
-bincode = "1"
+metrics = { path = "../metrics" }
+
+[dev-dependencies]
+proptest = "1"
+
+[dependencies.bincode]
+version = "1"

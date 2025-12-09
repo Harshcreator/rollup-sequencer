@@ -1,11 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use mempool::{Mempool, SimpleMempool};
 use storage::{BlockStore, InMemoryStorage, StateStore, TxStore};
 use thiserror::Error;
-use types::{merkle_root, Block, BlockHeader, BlockId, Hash, Transaction, TxId};
+use types::{merkle_root, Block, BlockHeader, BlockId, Hash, L1BatchCommitment, Transaction, TxId};
 
 use metrics as sequencer_metrics;
+use tracing::instrument;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ViewNumber(pub u64);
@@ -43,6 +44,19 @@ pub enum FinalityEvent {
 pub trait ConsensusEngine {
     fn submit_tx(&mut self, tx: Transaction) -> Result<TxId, ConsensusError>;
     fn step(&mut self) -> Result<Option<FinalityEvent>, ConsensusError>;
+}
+
+/// Build an L1 batch commitment for a set of committed L2 blocks.
+///
+/// In a real deployment, a component subscribing to `FinalityEvent`s
+/// would gather blocks into batches and call this function to obtain
+/// a value that is then posted to an L1 settlement contract.
+pub fn build_l1_batch_commitment(batch_number: u64, blocks: &[Block]) -> L1BatchCommitment {
+    let block_ids = blocks.iter().map(|b| b.header.id()).collect();
+    L1BatchCommitment {
+        batch_number,
+        block_ids,
+    }
 }
 
 /// A single-node consensus engine that periodically pulls transactions from
@@ -129,10 +143,14 @@ where
             .map_err(|e| ConsensusError::Mempool(e.to_string()))
     }
 
+    #[instrument(skip(self))]
     fn step(&mut self) -> Result<Option<FinalityEvent>, ConsensusError> {
+        let start = Instant::now();
         self.view.0 += 1;
 
         let Some(block) = self.build_block()? else {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            sequencer_metrics::record_consensus_step_duration_ms(elapsed);
             return Ok(None);
         };
 
@@ -156,6 +174,8 @@ where
         self.last_block_id = Some(block_id);
         self.last_height = height;
         sequencer_metrics::record_block_committed(block.txs.len());
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_consensus_step_duration_ms(elapsed);
 
         Ok(Some(FinalityEvent::BlockCommitted { block, qc }))
     }
@@ -196,5 +216,81 @@ mod tests {
             }
             _ => panic!("expected committed block"),
         }
+    }
+
+    #[test]
+    fn committed_block_heights_are_strictly_increasing() {
+        let mempool = SimpleMempool::default();
+        let storage = InMemoryStorage::default();
+        let mut engine = SingleNodeConsensus::new(mempool, storage);
+
+        // Submit several transactions so multiple blocks can be produced.
+        for i in 0..5 {
+            engine.submit_tx(make_tx(i)).unwrap();
+        }
+
+        let mut last_height = 0u64;
+        for _ in 0..5 {
+            if let Some(FinalityEvent::BlockCommitted { block, .. }) = engine.step().unwrap() {
+                assert!(block.header.height > last_height);
+                last_height = block.header.height;
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_distinct_blocks_at_same_height() {
+        let mempool = SimpleMempool::default();
+        let storage = InMemoryStorage::default();
+        let mut engine = SingleNodeConsensus::new(mempool, storage);
+
+        // Pre-fill enough transactions for several blocks.
+        for i in 0..10 {
+            engine.submit_tx(make_tx(i)).unwrap();
+        }
+
+        use std::collections::HashMap;
+        let mut by_height: HashMap<u64, types::BlockId> = HashMap::new();
+
+        for _ in 0..10 {
+            if let Some(FinalityEvent::BlockCommitted { block, .. }) = engine.step().unwrap() {
+                let h = block.header.height;
+                let id = block.header.id();
+                if let Some(existing) = by_height.get(&h) {
+                    assert_eq!(*existing, id, "two distinct blocks at same height");
+                } else {
+                    by_height.insert(h, id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn l1_batch_commitment_covers_committed_blocks() {
+        let mempool = SimpleMempool::default();
+        let storage = InMemoryStorage::default();
+        let mut engine = SingleNodeConsensus::new(mempool, storage);
+
+        // Submit a few transactions so at least one block is produced.
+        for i in 0..3 {
+            engine.submit_tx(make_tx(i)).unwrap();
+        }
+
+        let mut committed_blocks = Vec::new();
+        if let Some(FinalityEvent::BlockCommitted { block, .. }) = engine.step().unwrap() {
+            committed_blocks.push(block);
+        }
+
+        assert!(!committed_blocks.is_empty());
+
+        let batch = build_l1_batch_commitment(0, &committed_blocks);
+        assert_eq!(batch.batch_number, 0);
+        assert_eq!(batch.block_ids.len(), committed_blocks.len());
+        assert_eq!(batch.block_ids[0], committed_blocks[0].header.id());
+
+        // The batch hash is deterministic.
+        let h1 = batch.hash();
+        let h2 = batch.hash();
+        assert_eq!(h1, h2);
     }
 }

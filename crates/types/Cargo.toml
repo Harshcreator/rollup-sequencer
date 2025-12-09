@@ -10,3 +10,6 @@ blake3 = "1"
 # Used for canonical binary serialization of types when computing IDs.
 bincode = "1"
 
+[dev-dependencies]
+proptest = "1"
+

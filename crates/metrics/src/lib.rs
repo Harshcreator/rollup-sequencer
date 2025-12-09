@@ -1,6 +1,6 @@
 //! Sequencer metrics and Prometheus exporter wiring.
 
-use metrics::{counter, gauge};
+use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use once_cell::sync::OnceCell;
 
@@ -40,4 +40,14 @@ pub fn record_mempool_size(len: usize) {
 pub fn record_block_committed(tx_count: usize) {
 	counter!("sequencer_blocks_committed").increment(1);
 	counter!("sequencer_txs_committed").increment(tx_count as u64);
+}
+
+/// Record the duration of a consensus step in milliseconds.
+pub fn record_consensus_step_duration_ms(ms: f64) {
+	histogram!("sequencer_consensus_step_ms").record(ms);
+}
+
+/// Record the duration of a storage operation in milliseconds, labeled by op.
+pub fn record_storage_op_duration_ms(op: &'static str, ms: f64) {
+	histogram!("sequencer_storage_op_ms", "op" => op).record(ms);
 }

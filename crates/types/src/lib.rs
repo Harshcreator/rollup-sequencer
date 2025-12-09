@@ -69,6 +69,27 @@ pub struct Block {
     pub txs: Vec<TxId>,
 }
 
+/// A logical batch of L2 blocks that a sequencer would commit to an
+/// L1 settlement contract. The on-chain commitment is typically a
+/// hash of this structure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct L1BatchCommitment {
+    /// Monotonic batch number as seen by the L1 contract.
+    pub batch_number: u64,
+    /// IDs of the L2 blocks included in this batch, in order.
+    pub block_ids: Vec<BlockId>,
+}
+
+impl L1BatchCommitment {
+    /// Compute a deterministic commitment hash for this batch. In a
+    /// real deployment this value (or a related encoding) would be
+    /// posted to L1.
+    pub fn hash(&self) -> Hash {
+        let encoded = bincode::serialize(self).expect("L1BatchCommitment should serialize");
+        hash_bytes(&encoded)
+    }
+}
+
 /// Merkle proof for a transaction's inclusion in a block.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleProof {
@@ -261,6 +282,7 @@ mod serde_bytes_vec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn hash_bytes_is_deterministic() {
@@ -333,5 +355,44 @@ mod tests {
             let proof = merkle_proof(&txs, idx).expect("proof exists");
             assert!(verify_merkle_proof(root, *tx_id, &proof));
         }
+    }
+
+    proptest! {
+        #[test]
+        fn merkle_proof_holds_for_random_txs(data in proptest::collection::vec(any::<u8>(), 0..32)) {
+            // Build a list of TxIds from arbitrary payloads.
+            let txs: Vec<TxId> = data.iter().enumerate().map(|(i, b)| {
+                let tx = Transaction {
+                    namespace: NamespaceId(1),
+                    gas_price: 1,
+                    nonce: i as u64,
+                    payload: vec![*b],
+                    signature: vec![],
+                };
+                tx.id()
+            }).collect();
+
+            let root = merkle_root(&txs);
+            for (idx, tx_id) in txs.iter().enumerate() {
+                if let Some(proof) = merkle_proof(&txs, idx) {
+                    prop_assert!(verify_merkle_proof(root, *tx_id, &proof));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn l1_batch_commitment_hash_is_deterministic() {
+        let batch = L1BatchCommitment {
+            batch_number: 1,
+            block_ids: vec![
+                BlockId(hash_bytes(b"block-1")),
+                BlockId(hash_bytes(b"block-2")),
+            ],
+        };
+
+        let h1 = batch.hash();
+        let h2 = batch.hash();
+        assert_eq!(h1, h2);
     }
 }

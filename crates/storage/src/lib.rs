@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use thiserror::Error;
 use types::{Block, BlockId, Hash, Transaction, TxId};
+use metrics as sequencer_metrics;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -127,6 +129,7 @@ impl SledStorage {
 
 impl BlockStore for SledStorage {
     fn put_block(&mut self, block: Block) -> Result<(), StorageError> {
+        let start = Instant::now();
         let id = block.header.id();
         let height = block.header.height;
         let key_id = id.0 .0;
@@ -139,10 +142,13 @@ impl BlockStore for SledStorage {
         self.blocks_by_height
             .insert(key_height, &id.0 .0)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_put_block", elapsed);
         Ok(())
     }
 
     fn get_block(&self, id: BlockId) -> Result<Block, StorageError> {
+        let start = Instant::now();
         let key_id = id.0 .0;
         let Some(bytes) = self
             .blocks
@@ -150,10 +156,15 @@ impl BlockStore for SledStorage {
             .map_err(|e| StorageError::Backend(e.to_string()))? else {
             return Err(StorageError::NotFound);
         };
-        bincode::deserialize(&bytes).map_err(|e| StorageError::Backend(e.to_string()))
+        let block: Block = bincode::deserialize(&bytes)
+            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_get_block", elapsed);
+        Ok(block)
     }
 
     fn get_block_by_height(&self, height: u64) -> Result<Block, StorageError> {
+        let start = Instant::now();
         let key_height = height.to_be_bytes();
         let Some(id_bytes) = self
             .blocks_by_height
@@ -164,22 +175,29 @@ impl BlockStore for SledStorage {
         let mut id_arr = [0u8; 32];
         id_arr.copy_from_slice(&id_bytes);
         let id = BlockId(Hash(id_arr));
-        self.get_block(id)
+        let block = self.get_block(id)?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_get_block_by_height", elapsed);
+        Ok(block)
     }
 }
 
 impl TxStore for SledStorage {
     fn put_tx(&mut self, tx: Transaction) -> Result<TxId, StorageError> {
+        let start = Instant::now();
         let id = tx.id();
         let key_id = id.0 .0;
         let value = bincode::serialize(&tx).map_err(|e| StorageError::Backend(e.to_string()))?;
         self.txs
             .insert(key_id, value)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_put_tx", elapsed);
         Ok(id)
     }
 
     fn get_tx(&self, id: TxId) -> Result<Transaction, StorageError> {
+        let start = Instant::now();
         let key_id = id.0 .0;
         let Some(bytes) = self
             .txs
@@ -187,20 +205,28 @@ impl TxStore for SledStorage {
             .map_err(|e| StorageError::Backend(e.to_string()))? else {
             return Err(StorageError::NotFound);
         };
-        bincode::deserialize(&bytes).map_err(|e| StorageError::Backend(e.to_string()))
+        let tx: Transaction = bincode::deserialize(&bytes)
+            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_get_tx", elapsed);
+        Ok(tx)
     }
 }
 
 impl StateStore for SledStorage {
     fn put_state_root(&mut self, height: u64, root: Hash) -> Result<(), StorageError> {
+        let start = Instant::now();
         let key_height = height.to_be_bytes();
         self.state_roots
             .insert(key_height, &root.0)
             .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        sequencer_metrics::record_storage_op_duration_ms("sled_put_state_root", elapsed);
         Ok(())
     }
 
     fn latest_state_root(&self) -> Result<(u64, Hash), StorageError> {
+        let start = Instant::now();
         let mut latest: Option<(u64, Hash)> = None;
         for res in self.state_roots.iter() {
             let (k, v) = res.map_err(|e| StorageError::Backend(e.to_string()))?;
@@ -218,7 +244,12 @@ impl StateStore for SledStorage {
                 latest = Some(candidate);
             }
         }
-        latest.ok_or(StorageError::NotFound)
+        let result = latest.ok_or(StorageError::NotFound);
+        if result.is_ok() {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            sequencer_metrics::record_storage_op_duration_ms("sled_latest_state_root", elapsed);
+        }
+        result
     }
 }
 
@@ -226,6 +257,7 @@ impl StateStore for SledStorage {
 mod tests {
     use super::*;
     use types::{BlockHeader, NamespaceId, Transaction};
+    use proptest::prelude::*;
 
     fn make_block(height: u64) -> Block {
         let header = BlockHeader {
@@ -249,6 +281,24 @@ mod tests {
             nonce,
             payload: vec![],
             signature: vec![],
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn in_memory_tx_roundtrip_holds(nonces in proptest::collection::vec(0u64..1000, 0..32)) {
+            let mut store = InMemoryStorage::default();
+            let mut ids = Vec::new();
+            for nonce in nonces {
+                let tx = make_tx(nonce);
+                let id = store.put_tx(tx.clone()).unwrap();
+                ids.push((id, tx));
+            }
+
+            for (id, original) in ids {
+                let loaded = store.get_tx(id).unwrap();
+                prop_assert_eq!(loaded.id(), original.id());
+            }
         }
     }
 

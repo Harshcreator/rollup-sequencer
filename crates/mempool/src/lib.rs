@@ -2,6 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 use types::{NamespaceId, Transaction, TxId};
 
+use metrics as sequencer_metrics;
+
 #[derive(Clone, Debug)]
 pub struct MempoolConfig {
     pub max_tx: usize,
@@ -73,6 +75,9 @@ impl Mempool for SimpleMempool {
             .push(id);
         self.txs.insert(id, tx);
 
+        sequencer_metrics::record_tx_submitted();
+        sequencer_metrics::record_mempool_size(self.txs.len());
+
         Ok(id)
     }
 
@@ -113,6 +118,7 @@ impl Mempool for SimpleMempool {
             }
         }
         self.queue.retain(|id| !ids.contains(id));
+        sequencer_metrics::record_mempool_size(self.txs.len());
     }
 
     fn len(&self) -> usize {

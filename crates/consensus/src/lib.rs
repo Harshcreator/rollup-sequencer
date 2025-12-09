@@ -5,6 +5,8 @@ use storage::{BlockStore, InMemoryStorage, StateStore, TxStore};
 use thiserror::Error;
 use types::{merkle_root, Block, BlockHeader, BlockId, Hash, Transaction, TxId};
 
+use metrics as sequencer_metrics;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ViewNumber(pub u64);
 
@@ -153,6 +155,7 @@ where
 
         self.last_block_id = Some(block_id);
         self.last_height = height;
+        sequencer_metrics::record_block_committed(block.txs.len());
 
         Ok(Some(FinalityEvent::BlockCommitted { block, qc }))
     }

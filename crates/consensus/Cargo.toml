@@ -8,3 +8,4 @@ types = { path = "../types" }
 mempool = { path = "../mempool" }
 storage = { path = "../storage" }
 thiserror = "1"
+metrics = { path = "../metrics" }

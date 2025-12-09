@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use consensus::{ConsensusEngine, FinalityEvent, SingleNodeConsensus};
 use mempool::SimpleMempool;
+use metrics as sequencer_metrics;
 use rpc::{run_rpc_server, RpcState};
 use storage::SledStorage;
 use tokio::sync::Mutex;
@@ -15,6 +16,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .init();
+
+    // Install global metrics recorder; metrics are exposed via the RPC server.
+    sequencer_metrics::init_metrics()?;
 
     let db_path = std::path::Path::new("./data");
     let storage = SledStorage::open(db_path)?;

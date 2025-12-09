@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 types = { path = "../types" }
 thiserror = "1"
+metrics = { path = "../metrics" }

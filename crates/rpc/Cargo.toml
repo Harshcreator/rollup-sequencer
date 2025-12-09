@@ -13,3 +13,4 @@ consensus = { path = "../consensus" }
 storage = { path = "../storage" }
 tracing = "0.1"
 hex = "0.4"
+metrics = { path = "../metrics" }

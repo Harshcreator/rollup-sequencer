@@ -13,3 +13,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 rpc = { path = "crates/rpc" }
 metrics = { path = "crates/metrics" }
+networking = { path = "crates/networking" }

@@ -2,12 +2,18 @@ use std::sync::Arc;
 
 use axum::{extract::State, response::IntoResponse, routing::get, routing::post, Json, Router};
 use consensus::ConsensusEngine;
+use networking::NetworkHandle;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::info;
 use types::{NamespaceId, Transaction};
 
-pub type RpcState<E> = Arc<Mutex<E>>;
+pub struct RpcInnerState<E> {
+    pub engine: Arc<Mutex<E>>,
+    pub network: Option<NetworkHandle>,
+}
+
+pub type RpcState<E> = Arc<RpcInnerState<E>>;
 
 #[derive(Deserialize)]
 pub struct SubmitTxRequest {
@@ -41,10 +47,17 @@ async fn submit_tx_handler<E: ConsensusEngine + Send + Sync + 'static>(
         signature: vec![],
     };
 
-    let mut engine = state.lock().await;
+    let tx_clone = tx.clone();
+    let mut engine = state.engine.lock().await;
     let tx_id = engine
         .submit_tx(tx)
         .expect("submit_tx should not fail in RPC handler");
+    drop(engine);
+
+    if let Some(net) = &state.network {
+        // Fire-and-forget gossip; if the channel is full, we just drop.
+        net.broadcast_tx(tx_clone).await;
+    }
 
     Json(SubmitTxResponse {
         tx_id: hex::encode(tx_id.0 .0),
